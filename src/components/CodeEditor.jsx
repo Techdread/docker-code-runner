@@ -1,29 +1,42 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import Editor from '@monaco-editor/react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { 
   Box, 
   TextField, 
   Button, 
-  Select, 
-  MenuItem, 
-  FormControl, 
+  FormControl,
   InputLabel,
+  Select,
+  MenuItem,
   Typography,
-  Paper,
   CircularProgress,
   Alert
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { dockerService } from '../services/dockerService';
 
-const SUPPORTED_LANGUAGES = ['javascript', 'python', 'java', 'cpp'];
+const languageMap = {
+  'javascript': 'javascript',
+  'python': 'python',
+  'java': 'java',
+  'cpp': 'cpp'
+};
 
-const CodeEditor = () => {
+export default function CodeEditor() {
   const [code, setCode] = useState('');
-  const [language, setLanguage] = useState('javascript');
   const [output, setOutput] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [language, setLanguage] = useState('javascript');
   const [input, setInput] = useState('');
+
+  useEffect(() => {
+    if (output?.stdout) {
+      // Prism.highlightAll();
+    }
+  }, [output, language]);
 
   const handleSubmit = async () => {
     if (!code.trim()) {
@@ -31,12 +44,12 @@ const CodeEditor = () => {
       return;
     }
 
-    setLoading(true);
     setError(null);
+    setLoading(true);
     setOutput(null);
 
     try {
-      // Start the container for the selected language
+      // Start the container if it's not running
       await dockerService.startContainer(language);
 
       // Execute the code
@@ -45,29 +58,17 @@ const CodeEditor = () => {
       setOutput({
         stdout: result.stdout || '',
         stderr: result.stderr || '',
-        executionTime: result.executionTime || '0s',
-        status: result.stderr ? 'failure' : 'success'
+        executionTime: result.executionTime || ''
       });
-    } catch (error) {
-      console.error('Error executing code:', error);
-      setError(error.message || 'An error occurred while executing the code');
-      setOutput({
-        stdout: '',
-        stderr: error.message,
-        executionTime: '0s',
-        status: 'failure'
-      });
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Box>
-      <Typography variant="h5" gutterBottom>
-        Code Editor
-      </Typography>
-      
+    <Box sx={{ p: 3 }}>
       <FormControl fullWidth sx={{ mb: 2 }}>
         <InputLabel>Language</InputLabel>
         <Select
@@ -76,30 +77,27 @@ const CodeEditor = () => {
           onChange={(e) => setLanguage(e.target.value)}
           disabled={loading}
         >
-          {SUPPORTED_LANGUAGES.map((lang) => (
-            <MenuItem key={lang} value={lang}>
-              {lang.charAt(0).toUpperCase() + lang.slice(1)}
-            </MenuItem>
-          ))}
+          <MenuItem value="javascript">JavaScript</MenuItem>
+          <MenuItem value="python">Python</MenuItem>
+          <MenuItem value="java">Java</MenuItem>
+          <MenuItem value="cpp">C++</MenuItem>
         </Select>
       </FormControl>
 
-      <TextField
-        fullWidth
-        multiline
-        rows={10}
-        value={code}
-        onChange={(e) => setCode(e.target.value)}
-        placeholder="Enter your code here..."
-        sx={{ mb: 2 }}
-        InputProps={{
-          style: { 
-            fontFamily: 'monospace',
-            fontSize: '14px'
-          }
-        }}
-        disabled={loading}
-      />
+      <Box sx={{ mb: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+        <Editor
+          height="400px"
+          defaultLanguage="javascript"
+          language={language}
+          value={code}
+          onChange={setCode}
+          theme="vs-dark"
+          options={{
+            minimap: { enabled: false },
+            fontSize: 14
+          }}
+        />
+      </Box>
 
       <TextField
         fullWidth
@@ -129,52 +127,70 @@ const CodeEditor = () => {
         {loading ? 'Running...' : 'Run Code'}
       </Button>
 
-      {output && (
-        <Paper sx={{ p: 2, mt: 2, backgroundColor: '#1e1e1e', color: '#fff' }}>
-          <Typography variant="h6" gutterBottom sx={{ color: '#fff' }}>
-            Output {output.status === 'success' && '✓'}
-          </Typography>
-          
-          <Box sx={{ 
-            fontFamily: 'monospace', 
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            fontSize: '14px',
-            backgroundColor: '#2d2d2d',
-            p: 2,
-            borderRadius: 1,
-            maxHeight: '300px',
-            overflowY: 'auto'
-          }}>
-            {output.stdout}
-          </Box>
-          
-          {output.stderr && (
-            <Box sx={{ 
-              fontFamily: 'monospace',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              fontSize: '14px',
-              color: '#ff6b6b',
-              mt: 2 
-            }}>
-              {output.stderr}
-            </Box>
-          )}
-          
-          <Typography variant="body2" sx={{ mt: 1, color: '#888' }}>
-            Execution time: {output.executionTime}
-          </Typography>
-        </Paper>
-      )}
-
       {error && (
-        <Alert severity="error" sx={{ mt: 2 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>
           {error}
         </Alert>
       )}
+
+      {output && (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Output
+          </Typography>
+          
+          <Box sx={{
+            maxHeight: '300px',
+            overflowY: 'auto',
+            borderRadius: 1,
+            bgcolor: '#1e1e1e'
+          }}>
+            {output.stdout ? (
+              <SyntaxHighlighter
+                language={languageMap[language]}
+                style={vscDarkPlus}
+                customStyle={{
+                  margin: 0,
+                  padding: '1rem',
+                  fontSize: '14px',
+                  backgroundColor: 'transparent'
+                }}
+              >
+                {output.stdout}
+              </SyntaxHighlighter>
+            ) : (
+              <Box sx={{ p: 2, color: 'grey.500' }}>
+                No output
+              </Box>
+            )}
+          </Box>
+          
+          {output.stderr && (
+            <>
+              <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                Debug Trace
+              </Typography>
+              <Box sx={{
+                p: 2,
+                bgcolor: '#1e1e1e',
+                borderRadius: 1,
+                color: '#f44336',
+                fontFamily: 'monospace',
+                fontSize: '14px',
+                whiteSpace: 'pre-wrap'
+              }}>
+                {output.stderr}
+              </Box>
+            </>
+          )}
+
+          {output.executionTime && (
+            <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
+              Execution time: {output.executionTime}
+            </Typography>
+          )}
+        </Box>
+      )}
     </Box>
   );
-};
-
-export default CodeEditor;
+}
