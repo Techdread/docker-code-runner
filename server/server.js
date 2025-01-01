@@ -16,9 +16,28 @@ const CONTAINER_PREFIX = 'code-runner-';
 app.get('/api/containers', async (req, res) => {
   try {
     const containers = await docker.listContainers({ all: true });
-    const codeRunnerContainers = containers.filter(container => 
-      container.Names.some(name => name.startsWith('/' + CONTAINER_PREFIX))
-    );
+    const codeRunnerContainers = containers
+      .filter(container => container.Names.some(name => name.startsWith('/' + CONTAINER_PREFIX)))
+      .map(container => ({
+        id: container.Id,
+        name: container.Names[0].replace('/' + CONTAINER_PREFIX, ''),
+        status: container.State === 'running' ? 'running' : 'stopped',
+        uptime: container.Status,
+        language: container.Names[0].replace('/' + CONTAINER_PREFIX, '')
+      }));
+
+    // If no containers found, return default list with stopped status
+    if (codeRunnerContainers.length === 0) {
+      const defaultContainers = ['javascript', 'python', 'java', 'cpp'].map(lang => ({
+        id: '-',
+        name: lang,
+        status: 'stopped',
+        uptime: '0m',
+        language: lang
+      }));
+      return res.json(defaultContainers);
+    }
+
     res.json(codeRunnerContainers);
   } catch (error) {
     console.error('Error listing containers:', error);

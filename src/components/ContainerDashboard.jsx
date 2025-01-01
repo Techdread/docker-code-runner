@@ -93,7 +93,7 @@ const ContainerDashboard = () => {
   };
 
   const getStatusColor = (status) => {
-    switch (status) {
+    switch (status.toLowerCase()) {
       case 'running':
         return 'success';
       case 'stopped':
@@ -108,7 +108,7 @@ const ContainerDashboard = () => {
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h5">
+        <Typography variant="h6" component="h2">
           Container Status
         </Typography>
         <IconButton onClick={fetchContainers} disabled={loading}>
@@ -134,56 +134,41 @@ const ContainerDashboard = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {SUPPORTED_LANGUAGES.map((language) => {
-              const container = containers.find(c => c.language === language) || {
-                id: null,
-                language,
-                status: 'stopped',
-                uptime: '0m'
-              };
-
-              return (
-                <TableRow key={language}>
-                  <TableCell>{container.id || '-'}</TableCell>
-                  <TableCell>{language}</TableCell>
-                  <TableCell>
-                    <Chip
-                      label={container.status}
-                      color={getStatusColor(container.status)}
+            {containers.map((container) => (
+              <TableRow key={container.language}>
+                <TableCell>{container.id}</TableCell>
+                <TableCell>{container.language}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={container.status}
+                    color={getStatusColor(container.status)}
+                    size="small"
+                  />
+                </TableCell>
+                <TableCell>{container.uptime || '0m'}</TableCell>
+                <TableCell>
+                  {container.status === 'running' ? (
+                    <IconButton
+                      onClick={() => handleStopContainer(container.id)}
+                      disabled={loading || container.id === '-'}
+                      color="error"
                       size="small"
-                    />
-                  </TableCell>
-                  <TableCell>{container.uptime}</TableCell>
-                  <TableCell>
-                    {container.status === 'running' ? (
-                      <>
-                        <IconButton
-                          color="error"
-                          onClick={() => handleStopContainer(container.id)}
-                          disabled={loading}
-                        >
-                          <StopIcon />
-                        </IconButton>
-                        <IconButton
-                          color="info"
-                          onClick={() => handleViewLogs(container)}
-                        >
-                          <TerminalIcon />
-                        </IconButton>
-                      </>
-                    ) : (
-                      <IconButton
-                        color="success"
-                        onClick={() => handleStartContainer(language)}
-                        disabled={loading}
-                      >
-                        <PlayArrowIcon />
-                      </IconButton>
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
+                    >
+                      <StopIcon />
+                    </IconButton>
+                  ) : (
+                    <IconButton
+                      onClick={() => handleStartContainer(container.language)}
+                      disabled={loading}
+                      color="success"
+                      size="small"
+                    >
+                      <PlayArrowIcon />
+                    </IconButton>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
           </TableBody>
         </Table>
       </TableContainer>
