@@ -5,10 +5,12 @@ A React application for managing Docker containers that execute code in multiple
 ## Features
 
 - Execute code in Java, JavaScript, Python, and C++
-- Clean and intuitive UI
+- Clean and intuitive UI with syntax highlighting
 - Real-time container status monitoring
 - Secure code execution in isolated containers
-- Support for future testing framework integration
+- Automatic process termination for infinite loops
+- Output buffering and truncation for large outputs
+- Stop button functionality for long-running code
 
 ## Prerequisites
 
@@ -33,22 +35,39 @@ A React application for managing Docker containers that execute code in multiple
    docker build -t code-runner-cpp -f Dockerfile.cpp .
    ```
 
-3. Start the development server:
+3. Start the backend server:
    ```bash
+   cd server
+   npm install
+   node server.js
+   ```
+   The server will run on port 3001 by default.
+
+4. Start the frontend development server:
+   ```bash
+   # In a new terminal, from the project root
    npm run dev
+   ```
+   The frontend will run on port 5173 by default.
+
+5. Open your browser and navigate to:
+   ```
+   http://localhost:5173
    ```
 
 ## Project Structure
 
 ```
 docker-code-runner/
-├── src/
+├── src/                    # Frontend React application
 │   ├── components/
-│   │   ├── CodeEditor.jsx
+│   │   ├── CodeEditor.jsx  # Code editor with execution controls
 │   │   └── ContainerDashboard.jsx
 │   ├── services/
 │   └── App.jsx
-├── docker/
+├── server/                 # Backend Node.js server
+│   └── server.js          # API endpoints and container management
+├── docker/                 # Docker configurations
 │   ├── Dockerfile.python
 │   ├── Dockerfile.javascript
 │   ├── Dockerfile.java
@@ -56,13 +75,12 @@ docker-code-runner/
 └── README.md
 ```
 
-## Adding New Languages
+## Code Execution Limits
 
-To add support for a new programming language:
-
-1. Create a new Dockerfile in the `docker/` directory
-2. Add the language option in `src/components/CodeEditor.jsx`
-3. Update the container management logic in the backend
+- Maximum execution time: 5 seconds
+- Maximum output buffer: 10KB
+- Automatic container recycling after each execution
+- Force termination available via stop button
 
 ## Security Considerations
 
@@ -70,6 +88,21 @@ To add support for a new programming language:
 - Non-root users are used in containers
 - Resource limits are enforced
 - Network access is restricted
+- Containers are recycled after each execution
+- Output buffering prevents memory exhaustion
+
+## Troubleshooting
+
+If you encounter any issues:
+
+1. Ensure Docker Desktop is running
+2. Check both frontend and backend server logs
+3. If a container becomes unresponsive:
+   ```bash
+   docker ps  # List running containers
+   docker kill <container-id>  # Force stop a container
+   ```
+4. Restart the backend server if needed
 
 ## License
 
