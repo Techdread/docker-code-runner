@@ -12,9 +12,13 @@ import {
   MenuItem,
   Typography,
   CircularProgress,
-  Alert
+  Alert,
+  IconButton,
+  Collapse
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import { dockerService } from '../services/dockerService';
 
 const languageMap = {
@@ -31,6 +35,7 @@ export default function CodeEditor() {
   const [error, setError] = useState(null);
   const [language, setLanguage] = useState('javascript');
   const [input, setInput] = useState('');
+  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     if (output?.stdout) {
@@ -167,20 +172,30 @@ export default function CodeEditor() {
           
           {output.stderr && (
             <>
-              <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
-                Debug Trace
-              </Typography>
-              <Box sx={{
-                p: 2,
-                bgcolor: '#1e1e1e',
-                borderRadius: 1,
-                color: '#f44336',
-                fontFamily: 'monospace',
-                fontSize: '14px',
-                whiteSpace: 'pre-wrap'
-              }}>
-                {output.stderr}
+              <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
+                <Typography variant="h6" sx={{ flex: 1 }}>
+                  Debug Trace
+                </Typography>
+                <IconButton 
+                  onClick={() => setShowDebug(!showDebug)}
+                  size="small"
+                >
+                  {showDebug ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+                </IconButton>
               </Box>
+              <Collapse in={showDebug}>
+                <Box sx={{
+                  p: 2,
+                  bgcolor: '#1e1e1e',
+                  borderRadius: 1,
+                  color: '#f44336',
+                  fontFamily: 'monospace',
+                  fontSize: '14px',
+                  whiteSpace: 'pre-wrap'
+                }}>
+                  {output.stderr}
+                </Box>
+              </Collapse>
             </>
           )}
 
