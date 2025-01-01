@@ -43,16 +43,16 @@ export const dockerService = {
     }
   },
 
-  async executeCode(language, code) {
+  async executeCode(language, code, input = '') {
     try {
       const response = await axios.post(`${API_BASE_URL}/execute`, {
         language,
-        code
+        code,
+        input
       });
       return response.data;
     } catch (error) {
-      console.error('Error executing code:', error);
-      throw error;
+      throw new Error(error.response?.data?.error || 'Failed to execute code');
     }
   }
 };

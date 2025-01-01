@@ -21,6 +21,16 @@ public class Runner {
                 System.err.println("[DEBUG] Removed quotes from code");
             }
             
+            // Get user input if provided as second argument
+            String userInput = "";
+            if (args.length > 1) {
+                userInput = args[1];
+                if (userInput.startsWith("\"") && userInput.endsWith("\"")) {
+                    userInput = userInput.substring(1, userInput.length() - 1);
+                }
+                System.err.println("[DEBUG] User input (without quotes): " + userInput);
+            }
+            
             code = code.replace("\\n", "\n")
                       .replace("\\r", "\r")
                       .replace("\\t", "\t")
@@ -80,6 +90,15 @@ public class Runner {
             ProcessBuilder pb = new ProcessBuilder("java", className);
             pb.redirectErrorStream(true);
             Process process = pb.start();
+
+            // If we have user input, send it to the process
+            if (!userInput.isEmpty()) {
+                System.err.println("[DEBUG] Sending user input: " + userInput);
+                try (PrintWriter pw = new PrintWriter(process.getOutputStream())) {
+                    pw.println(userInput);
+                    pw.flush();
+                }
+            }
 
             // Read the output
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {

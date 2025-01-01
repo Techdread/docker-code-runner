@@ -107,13 +107,14 @@ app.post('/api/containers/stop', async (req, res) => {
 });
 
 app.post('/api/execute', async (req, res) => {
-  const { language, code } = req.body;
+  const { language, code, input } = req.body;
   if (!language || !code) {
     return res.status(400).json({ error: 'Language and code are required' });
   }
 
   console.log('[DEBUG] Executing code for language:', language);
   console.log('[DEBUG] Code:', code);
+  console.log('[DEBUG] User input:', input || 'none');
 
   const containerName = `${CONTAINER_PREFIX}${language}`;
   console.log('[DEBUG] Container name:', containerName);
@@ -142,8 +143,8 @@ app.post('/api/execute', async (req, res) => {
         
         console.log('[DEBUG] Escaped Java code:', escapedCode);
         
-        // Pass the code as a properly quoted string argument
-        cmd = ['java', '-cp', '.', 'Runner', `"${escapedCode}"`];
+        // Pass the code as a quoted string, but input without quotes
+        cmd = ['java', '-cp', '.', 'Runner', `"${escapedCode}"`, input || ''];
         break;
       case 'cpp':
         // For C++, we need to compile and run

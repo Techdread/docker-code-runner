@@ -23,6 +23,7 @@ const CodeEditor = () => {
   const [output, setOutput] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [input, setInput] = useState('');
 
   const handleSubmit = async () => {
     if (!code.trim()) {
@@ -39,7 +40,7 @@ const CodeEditor = () => {
       await dockerService.startContainer(language);
 
       // Execute the code
-      const result = await dockerService.executeCode(language, code);
+      const result = await dockerService.executeCode(language, code, input);
       
       setOutput({
         stdout: result.stdout || '',
@@ -90,6 +91,23 @@ const CodeEditor = () => {
         value={code}
         onChange={(e) => setCode(e.target.value)}
         placeholder="Enter your code here..."
+        sx={{ mb: 2 }}
+        InputProps={{
+          style: { 
+            fontFamily: 'monospace',
+            fontSize: '14px'
+          }
+        }}
+        disabled={loading}
+      />
+
+      <TextField
+        fullWidth
+        multiline
+        rows={5}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Enter input here..."
         sx={{ mb: 2 }}
         InputProps={{
           style: { 
