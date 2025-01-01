@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install common engineering libraries
+RUN pip install --no-cache-dir \
+    numpy \
+    pandas \
+    scipy \
+    matplotlib \
+    pytest \
+    requests \
+    flask
+
+# Create a non-root user with a different UID
+RUN useradd -m -u 1001 coderunner
+USER coderunner
+
+# Copy the execution script
+COPY --chown=coderunner:coderunner runner.py .
+
+CMD ["python", "runner.py"]
