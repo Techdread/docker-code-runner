@@ -147,6 +147,7 @@ app.post('/api/execute', async (req, res) => {
         return res.status(400).json({ error: 'Unsupported language' });
     }
 
+    // Execute the code
     const exec = await container.exec({
       Cmd: cmd,
       AttachStdout: true,
@@ -154,28 +155,52 @@ app.post('/api/execute', async (req, res) => {
     });
 
     const start = Date.now();
-    const stream = await exec.start();
-    
-    let stdout = '';
-    let stderr = '';
 
-    stream.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
+    // Create a promise to handle the execution
+    const execPromise = new Promise((resolve, reject) => {
+      exec.start({ hijack: true, stdin: true }, (err, stream) => {
+        if (err) return reject(err);
+        
+        let stdout = '';
+        let stderr = '';
 
-    stream.on('error', (chunk) => {
-      stderr += chunk.toString();
-    });
+        // Handle the multiplexed streams
+        container.modem.demuxStream(stream, {
+          write: (chunk) => {
+            stdout += chunk.toString('utf8');
+          }
+        }, {
+          write: (chunk) => {
+            stderr += chunk.toString('utf8');
+          }
+        });
 
-    stream.on('end', () => {
-      const executionTime = `${(Date.now() - start) / 1000}s`;
-      res.json({
-        stdout,
-        stderr,
-        executionTime,
-        status: stderr ? 'error' : 'success'
+        stream.on('end', () => {
+          resolve({ stdout, stderr });
+        });
+
+        stream.on('error', (err) => {
+          reject(err);
+        });
       });
     });
+
+    // Wait for execution to complete
+    const { stdout, stderr } = await execPromise;
+    const executionTime = ((Date.now() - start) / 1000).toFixed(3);
+
+    // Clean the output by removing control characters
+    const cleanOutput = (str) => str
+      .replace(/\u0001\u0000\u0000\u0000\u0000\u0000\u0000/g, '')
+      .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, '');
+
+    res.json({
+      stdout: cleanOutput(stdout),
+      stderr: cleanOutput(stderr),
+      executionTime: `${executionTime}s`,
+      status: stderr ? 'failure' : 'success'
+    });
+
   } catch (error) {
     console.error('Error executing code:', error);
     res.status(500).json({ error: error.message });

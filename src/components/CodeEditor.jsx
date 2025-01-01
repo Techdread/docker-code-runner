@@ -9,7 +9,8 @@ import {
   InputLabel,
   Typography,
   Paper,
-  CircularProgress
+  CircularProgress,
+  Alert
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { dockerService } from '../services/dockerService';
@@ -91,7 +92,10 @@ const CodeEditor = () => {
         placeholder="Enter your code here..."
         sx={{ mb: 2 }}
         InputProps={{
-          style: { fontFamily: 'monospace' }
+          style: { 
+            fontFamily: 'monospace',
+            fontSize: '14px'
+          }
         }}
         disabled={loading}
       />
@@ -100,31 +104,56 @@ const CodeEditor = () => {
         variant="contained"
         color="primary"
         onClick={handleSubmit}
-        startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <PlayArrowIcon />}
-        sx={{ mb: 2 }}
         disabled={loading}
+        startIcon={loading ? <CircularProgress size={20} /> : <PlayArrowIcon />}
+        sx={{ mb: 2 }}
       >
         {loading ? 'Running...' : 'Run Code'}
       </Button>
 
-      {error && (
-        <Typography color="error" sx={{ mb: 2 }}>
-          {error}
-        </Typography>
-      )}
-
       {output && (
-        <Paper sx={{ p: 2, mt: 2, bgcolor: 'grey.900' }}>
-          <Typography variant="h6" gutterBottom>
-            Output {output.status === 'success' ? '✅' : '❌'}
+        <Paper sx={{ p: 2, mt: 2, backgroundColor: '#1e1e1e', color: '#fff' }}>
+          <Typography variant="h6" gutterBottom sx={{ color: '#fff' }}>
+            Output {output.status === 'success' && '✓'}
           </Typography>
-          <Typography component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-            {output.stdout || output.stderr}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
+          
+          <Box sx={{ 
+            fontFamily: 'monospace', 
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            fontSize: '14px',
+            backgroundColor: '#2d2d2d',
+            p: 2,
+            borderRadius: 1,
+            maxHeight: '300px',
+            overflowY: 'auto'
+          }}>
+            {output.stdout}
+          </Box>
+          
+          {output.stderr && (
+            <Box sx={{ 
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontSize: '14px',
+              color: '#ff6b6b',
+              mt: 2 
+            }}>
+              {output.stderr}
+            </Box>
+          )}
+          
+          <Typography variant="body2" sx={{ mt: 1, color: '#888' }}>
             Execution time: {output.executionTime}
           </Typography>
         </Paper>
+      )}
+
+      {error && (
+        <Alert severity="error" sx={{ mt: 2 }}>
+          {error}
+        </Alert>
       )}
     </Box>
   );
