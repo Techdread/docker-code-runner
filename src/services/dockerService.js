@@ -48,11 +48,29 @@ export const dockerService = {
       const response = await axios.post(`${API_BASE_URL}/execute`, {
         language,
         code,
-        input
+        input,
+        outputBufferLimit: 10000 // Limit output buffer on server side
       });
       return response.data;
     } catch (error) {
-      throw new Error(error.response?.data?.error || 'Failed to execute code');
+      console.error('Error executing code:', error);
+      if (error.response?.status === 413) {
+        throw new Error('Output exceeded buffer limit. Program stopped.');
+      }
+      throw error;
+    }
+  },
+
+  async stopExecution(language) {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/execute/stop`, {
+        language,
+        clearBuffer: true // Tell server to clear output buffer
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error stopping code execution:', error);
+      throw error;
     }
   }
 };

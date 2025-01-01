@@ -12,6 +12,58 @@ app.use(express.json());
 // Container name prefix
 const CONTAINER_PREFIX = 'code-runner-';
 
+// Track running executions
+const runningExecutions = new Map();
+
+// Maximum execution time (5 seconds)
+const MAX_EXECUTION_TIME = 5000;
+
+// Maximum output buffer size (10KB)
+const MAX_OUTPUT_SIZE = 10 * 1024;
+
+// Function to restart container
+async function restartContainer(containerName) {
+  try {
+    const container = docker.getContainer(containerName);
+    await container.kill({ signal: 'SIGKILL' });
+    await container.remove({ force: true });
+    
+    // Recreate the container
+    const language = containerName.replace(CONTAINER_PREFIX, '');
+    const imageName = `code-runner-${language}`;
+    
+    await docker.createContainer({
+      Image: imageName,
+      name: containerName,
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+      OpenStdin: true,
+      StdinOnce: false,
+      HostConfig: {
+        AutoRemove: true,
+        RestartPolicy: {
+          Name: 'no'
+        }
+      }
+    });
+    
+    const newContainer = docker.getContainer(containerName);
+    await newContainer.start();
+  } catch (error) {
+    console.error('Error restarting container:', error);
+    throw error;
+  }
+}
+
+// Function to ensure container is clean
+async function ensureCleanContainer(language) {
+  const containerName = `${CONTAINER_PREFIX}${language}`;
+  await restartContainer(containerName);
+  return containerName;
+}
+
 // Routes
 app.get('/api/containers', async (req, res) => {
   try {
@@ -112,14 +164,10 @@ app.post('/api/execute', async (req, res) => {
     return res.status(400).json({ error: 'Language and code are required' });
   }
 
-  console.log('[DEBUG] Executing code for language:', language);
-  console.log('[DEBUG] Code:', code);
-  console.log('[DEBUG] User input:', input || 'none');
-
-  const containerName = `${CONTAINER_PREFIX}${language}`;
-  console.log('[DEBUG] Container name:', containerName);
-
+  let containerName;
   try {
+    // Ensure we have a clean container for execution
+    containerName = await ensureCleanContainer(language);
     const container = docker.getContainer(containerName);
     
     // Create execution command based on language
@@ -132,29 +180,20 @@ app.post('/api/execute', async (req, res) => {
         cmd = ['node', '-e', code];
         break;
       case 'java':
-        // For Java, we use our Runner class to handle compilation and execution
-        // Escape the code string for Java
         const escapedCode = code
           .replace(/\\/g, '\\\\')
           .replace(/"/g, '\\"')
           .replace(/\n/g, '\\n')
           .replace(/\r/g, '\\r')
           .replace(/\t/g, '\\t');
-        
-        console.log('[DEBUG] Escaped Java code:', escapedCode);
-        
-        // Pass the code as a quoted string, but input without quotes
         cmd = ['java', '-cp', '.', 'Runner', `"${escapedCode}"`, input || ''];
         break;
       case 'cpp':
-        // For C++, we need to compile and run
         cmd = ['sh', '-c', `echo '${code}' > main.cpp && g++ main.cpp -o main && ./main`];
         break;
       default:
         return res.status(400).json({ error: 'Unsupported language' });
     }
-
-    console.log('[DEBUG] Execution command:', cmd);
 
     // Execute the code
     const exec = await container.exec({
@@ -164,76 +203,120 @@ app.post('/api/execute', async (req, res) => {
     });
 
     const start = Date.now();
-    console.log('[DEBUG] Starting execution at:', start);
+    
+    // Store the execution for potential termination
+    runningExecutions.set(containerName, { exec, container, start });
 
     // Create a promise to handle the execution
     const execPromise = new Promise((resolve, reject) => {
+      let isTerminated = false;
+      
+      const cleanup = async () => {
+        if (!isTerminated) {
+          isTerminated = true;
+          try {
+            // Force kill the container and recreate it
+            await restartContainer(containerName);
+          } catch (err) {
+            console.error('Error during cleanup:', err);
+          }
+        }
+      };
+
       exec.start({ hijack: true, stdin: true }, (err, stream) => {
         if (err) {
-          console.error('[DEBUG] Exec start error:', err);
+          cleanup();
           return reject(err);
         }
         
-        console.log('[DEBUG] Stream created successfully');
-        
         let stdout = '';
         let stderr = '';
+        let outputExceeded = false;
 
         // Handle the multiplexed streams
         container.modem.demuxStream(stream, {
           write: (chunk) => {
-            const data = chunk.toString('utf8');
-            console.log('[DEBUG] stdout chunk:', data);
-            stdout += data;
+            if (stdout.length + chunk.length <= MAX_OUTPUT_SIZE) {
+              stdout += chunk.toString('utf8');
+            } else if (!outputExceeded) {
+              stdout += '\n... Output limit exceeded. Stopping execution ...\n';
+              outputExceeded = true;
+              cleanup();
+              resolve({ stdout, stderr, outputExceeded: true });
+            }
           }
         }, {
           write: (chunk) => {
-            const data = chunk.toString('utf8');
-            console.log('[DEBUG] stderr chunk:', data);
-            stderr += data;
+            if (stderr.length + chunk.length <= MAX_OUTPUT_SIZE) {
+              stderr += chunk.toString('utf8');
+            }
           }
         });
 
+        // Set timeout to prevent infinite execution
+        const timeoutId = setTimeout(async () => {
+          stderr += '\n... Execution timed out (5 seconds limit) ...\n';
+          await cleanup();
+          resolve({ stdout, stderr, timedOut: true });
+        }, MAX_EXECUTION_TIME);
+
         stream.on('end', () => {
-          console.log('[DEBUG] Stream ended');
-          console.log('[DEBUG] Final stdout length:', stdout.length);
-          console.log('[DEBUG] Final stderr length:', stderr.length);
+          clearTimeout(timeoutId);
           resolve({ stdout, stderr });
         });
 
-        stream.on('error', (err) => {
-          console.error('[DEBUG] Stream error:', err);
-          reject(err);
+        stream.on('error', async (error) => {
+          clearTimeout(timeoutId);
+          await cleanup();
+          reject(error);
         });
       });
     });
 
-    // Wait for execution to complete
-    console.log('[DEBUG] Waiting for execution to complete');
-    const { stdout, stderr } = await execPromise;
-    const executionTime = ((Date.now() - start) / 1000).toFixed(3);
-    console.log('[DEBUG] Execution completed in:', executionTime, 'seconds');
+    const { stdout, stderr, timedOut, outputExceeded } = await execPromise;
+    const executionTime = Date.now() - start;
 
-    // Clean the output by removing control characters
-    const cleanOutput = (str) => str
-      .replace(/\u0001\u0000\u0000\u0000\u0000\u0000\u0000/g, '')
-      .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, '');
+    // Clean up
+    runningExecutions.delete(containerName);
 
-    const cleanedStdout = cleanOutput(stdout);
-    const cleanedStderr = cleanOutput(stderr);
-
-    console.log('[DEBUG] Cleaned stdout length:', cleanedStdout.length);
-    console.log('[DEBUG] Cleaned stderr length:', cleanedStderr.length);
-
+    // Send response
     res.json({
-      stdout: cleanedStdout,
-      stderr: cleanedStderr,
-      executionTime: `${executionTime}s`,
-      status: stderr ? 'failure' : 'success'
+      stdout: stdout || '',
+      stderr: stderr || '',
+      executionTime: timedOut ? 'Timed out (5s limit)' : 
+                   outputExceeded ? 'Stopped (output limit exceeded)' : 
+                   `${executionTime}ms`
     });
 
   } catch (error) {
-    console.error('[DEBUG] Error executing code:', error);
+    console.error('Error executing code:', error);
+    // Ensure cleanup even on error
+    if (containerName) {
+      try {
+        await restartContainer(containerName);
+      } catch (err) {
+        console.error('Error during error cleanup:', err);
+      }
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/execute/stop', async (req, res) => {
+  const { language } = req.body;
+  if (!language) {
+    return res.status(400).json({ error: 'Language is required' });
+  }
+
+  const containerName = `${CONTAINER_PREFIX}${language}`;
+  
+  try {
+    // Force restart the container to kill any running processes
+    await restartContainer(containerName);
+    runningExecutions.delete(containerName);
+    res.json({ status: 'success', message: 'Execution stopped' });
+  } catch (error) {
+    console.error('Error stopping execution:', error);
     res.status(500).json({ error: error.message });
   }
 });

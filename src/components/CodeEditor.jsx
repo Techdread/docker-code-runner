@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -17,6 +17,7 @@ import {
   Collapse
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import { dockerService } from '../services/dockerService';
@@ -36,6 +37,16 @@ export default function CodeEditor() {
   const [language, setLanguage] = useState('javascript');
   const [input, setInput] = useState('');
   const [showDebug, setShowDebug] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const maxOutputLength = 5000; // Maximum number of characters to display
+  const outputRef = useRef({ stdout: '', stderr: '' });
+
+  const truncateOutput = (text) => {
+    if (text.length > maxOutputLength) {
+      return text.substring(0, maxOutputLength) + '\n... Output truncated. Program is still running but output is limited ...';
+    }
+    return text;
+  };
 
   useEffect(() => {
     if (output?.stdout) {
@@ -51,7 +62,9 @@ export default function CodeEditor() {
 
     setError(null);
     setLoading(true);
+    setIsRunning(true);
     setOutput(null);
+    outputRef.current = { stdout: '', stderr: '' };
 
     try {
       // Start the container if it's not running
@@ -61,7 +74,7 @@ export default function CodeEditor() {
       const result = await dockerService.executeCode(language, code, input);
       
       setOutput({
-        stdout: result.stdout || '',
+        stdout: truncateOutput(result.stdout || ''),
         stderr: result.stderr || '',
         executionTime: result.executionTime || ''
       });
@@ -69,6 +82,28 @@ export default function CodeEditor() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setIsRunning(false);
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await dockerService.stopExecution(language);
+      setIsRunning(false);
+      setLoading(false);
+      
+      // Clear any remaining output buffer
+      if (outputRef.current.stdout) {
+        setOutput(prev => ({
+          ...prev,
+          stdout: truncateOutput(outputRef.current.stdout) + '\n[Program execution stopped by user]',
+          executionTime: 'Stopped by user'
+        }));
+      } else {
+        setError('Program execution stopped by user');
+      }
+    } catch (err) {
+      setError(err.message);
     }
   };
 
@@ -121,16 +156,25 @@ export default function CodeEditor() {
         disabled={loading}
       />
 
-      <Button
-        variant="contained"
-        color="primary"
-        onClick={handleSubmit}
-        disabled={loading}
-        startIcon={loading ? <CircularProgress size={20} /> : <PlayArrowIcon />}
-        sx={{ mb: 2 }}
-      >
-        {loading ? 'Running...' : 'Run Code'}
-      </Button>
+      <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+        <Button
+          variant="contained"
+          onClick={handleSubmit}
+          disabled={loading || isRunning}
+          startIcon={<PlayArrowIcon />}
+        >
+          Run Code
+        </Button>
+        <Button
+          variant="contained"
+          color="error"
+          onClick={handleStop}
+          disabled={!isRunning}
+          startIcon={<StopIcon />}
+        >
+          Stop
+        </Button>
+      </Box>
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -152,12 +196,12 @@ export default function CodeEditor() {
           }}>
             {output.stdout ? (
               <SyntaxHighlighter
-                language={languageMap[language]}
+                language={"text"}
                 style={vscDarkPlus}
                 customStyle={{
                   margin: 0,
                   padding: '1rem',
-                  fontSize: '14px',
+                  fontSize: '16px',
                   backgroundColor: 'transparent'
                 }}
               >
