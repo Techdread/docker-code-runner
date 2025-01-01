@@ -112,7 +112,11 @@ app.post('/api/execute', async (req, res) => {
     return res.status(400).json({ error: 'Language and code are required' });
   }
 
+  console.log('[DEBUG] Executing code for language:', language);
+  console.log('[DEBUG] Code:', code);
+
   const containerName = `${CONTAINER_PREFIX}${language}`;
+  console.log('[DEBUG] Container name:', containerName);
 
   try {
     const container = docker.getContainer(containerName);
@@ -136,6 +140,8 @@ app.post('/api/execute', async (req, res) => {
           .replace(/\r/g, '\\r')
           .replace(/\t/g, '\\t');
         
+        console.log('[DEBUG] Escaped Java code:', escapedCode);
+        
         // Pass the code as a properly quoted string argument
         cmd = ['java', '-cp', '.', 'Runner', `"${escapedCode}"`];
         break;
@@ -147,6 +153,8 @@ app.post('/api/execute', async (req, res) => {
         return res.status(400).json({ error: 'Unsupported language' });
     }
 
+    console.log('[DEBUG] Execution command:', cmd);
+
     // Execute the code
     const exec = await container.exec({
       Cmd: cmd,
@@ -155,11 +163,17 @@ app.post('/api/execute', async (req, res) => {
     });
 
     const start = Date.now();
+    console.log('[DEBUG] Starting execution at:', start);
 
     // Create a promise to handle the execution
     const execPromise = new Promise((resolve, reject) => {
       exec.start({ hijack: true, stdin: true }, (err, stream) => {
-        if (err) return reject(err);
+        if (err) {
+          console.error('[DEBUG] Exec start error:', err);
+          return reject(err);
+        }
+        
+        console.log('[DEBUG] Stream created successfully');
         
         let stdout = '';
         let stderr = '';
@@ -167,42 +181,58 @@ app.post('/api/execute', async (req, res) => {
         // Handle the multiplexed streams
         container.modem.demuxStream(stream, {
           write: (chunk) => {
-            stdout += chunk.toString('utf8');
+            const data = chunk.toString('utf8');
+            console.log('[DEBUG] stdout chunk:', data);
+            stdout += data;
           }
         }, {
           write: (chunk) => {
-            stderr += chunk.toString('utf8');
+            const data = chunk.toString('utf8');
+            console.log('[DEBUG] stderr chunk:', data);
+            stderr += data;
           }
         });
 
         stream.on('end', () => {
+          console.log('[DEBUG] Stream ended');
+          console.log('[DEBUG] Final stdout length:', stdout.length);
+          console.log('[DEBUG] Final stderr length:', stderr.length);
           resolve({ stdout, stderr });
         });
 
         stream.on('error', (err) => {
+          console.error('[DEBUG] Stream error:', err);
           reject(err);
         });
       });
     });
 
     // Wait for execution to complete
+    console.log('[DEBUG] Waiting for execution to complete');
     const { stdout, stderr } = await execPromise;
     const executionTime = ((Date.now() - start) / 1000).toFixed(3);
+    console.log('[DEBUG] Execution completed in:', executionTime, 'seconds');
 
     // Clean the output by removing control characters
     const cleanOutput = (str) => str
       .replace(/\u0001\u0000\u0000\u0000\u0000\u0000\u0000/g, '')
       .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, '');
 
+    const cleanedStdout = cleanOutput(stdout);
+    const cleanedStderr = cleanOutput(stderr);
+
+    console.log('[DEBUG] Cleaned stdout length:', cleanedStdout.length);
+    console.log('[DEBUG] Cleaned stderr length:', cleanedStderr.length);
+
     res.json({
-      stdout: cleanOutput(stdout),
-      stderr: cleanOutput(stderr),
+      stdout: cleanedStdout,
+      stderr: cleanedStderr,
       executionTime: `${executionTime}s`,
       status: stderr ? 'failure' : 'success'
     });
 
   } catch (error) {
-    console.error('Error executing code:', error);
+    console.error('[DEBUG] Error executing code:', error);
     res.status(500).json({ error: error.message });
   }
 });
