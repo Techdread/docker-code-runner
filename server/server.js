@@ -33,36 +33,15 @@ async function killExecution(containerId, execId) {
 // Function to restart container
 async function restartContainer(containerName) {
   try {
-    if (containerStates.get(containerName) === CONTAINER_STATE.CLEANING) {
-      console.log(`Container ${containerName} is already being cleaned up`);
-      return;
-    }
-
-    containerStates.set(containerName, CONTAINER_STATE.CLEANING);
-    console.log(`Restarting container ${containerName}...`);
+    const container = docker.getContainer(containerName);
+    await container.kill({ signal: 'SIGKILL' });
+    await container.remove({ force: true });
     
-    // Get image name
+    // Recreate the container
     const language = containerName.replace(CONTAINER_PREFIX, '');
     const imageName = `code-runner-${language}`;
-
-    // Ensure image exists
-    const imageExists = await ensureImageExists(imageName);
-    if (!imageExists) {
-      throw new Error(`Failed to ensure image ${imageName} exists`);
-    }
     
-    try {
-      const container = docker.getContainer(containerName);
-      await container.remove({ force: true });
-    } catch (err) {
-      // Ignore if container doesn't exist
-      if (err.statusCode !== 404) {
-        console.error(`Error removing container ${containerName}:`, err);
-      }
-    }
-    
-    console.log(`Creating new container ${containerName}...`);
-    const newContainer = await docker.createContainer({
+    await docker.createContainer({
       Image: imageName,
       name: containerName,
       AttachStdin: true,
@@ -71,30 +50,18 @@ async function restartContainer(containerName) {
       Tty: true,
       OpenStdin: true,
       StdinOnce: false,
-      WorkingDir: '/app',
       HostConfig: {
-        AutoRemove: false,
+        AutoRemove: true,
         RestartPolicy: {
           Name: 'no'
         }
       }
     });
-
-    console.log(`Starting container ${containerName}...`);
+    
+    const newContainer = docker.getContainer(containerName);
     await newContainer.start();
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Verify container is running
-    const info = await newContainer.inspect();
-    if (!info.State.Running) {
-      throw new Error(`Failed to start container ${containerName}`);
-    }
-    
-    console.log(`Container ${containerName} is ready`);
-    containerStates.set(containerName, CONTAINER_STATE.IDLE);
   } catch (error) {
-    console.error(`Error in restartContainer for ${containerName}:`, error);
-    containerStates.set(containerName, CONTAINER_STATE.IDLE);
+    console.error('Error restarting container:', error);
     throw error;
   }
 }
@@ -104,16 +71,6 @@ async function ensureCleanContainer(language) {
   const containerName = `${CONTAINER_PREFIX}${language}`;
   await restartContainer(containerName);
   return containerName;
-}
-
-// Function to escape code for Java
-function escapeJavaCode(code) {
-  return code
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r')
-    .replace(/\t/g, '\\t');
 }
 
 // Routes
@@ -180,13 +137,7 @@ app.post('/api/containers/start', async (req, res) => {
         AttachStderr: true,
         Tty: true,
         OpenStdin: true,
-        StdinOnce: false,
-        HostConfig: {
-          AutoRemove: true,
-          RestartPolicy: {
-            Name: 'no'
-          }
-        }
+        StdinOnce: false
       });
 
       const container = docker.getContainer(containerName);
@@ -265,13 +216,14 @@ app.post('/api/execute', async (req, res) => {
       case 'javascript':
         cmd = ['node', '-e', code];
         break;
-      }
+      case 'cpp':
+        cmd = ['sh', '-c', `echo '${code}' > main.cpp && g++ main.cpp -o main && ./main`];
+        break;
       default:
         return res.status(400).json({ error: 'Unsupported language' });
     }
 
     // Execute the code
-    console.log(`Executing ${language} code...`);
     const exec = await container.exec({
       Cmd: cmd,
       AttachStdout: true,
@@ -299,21 +251,38 @@ app.post('/api/execute', async (req, res) => {
     // Create a promise to handle the execution
     const execPromise = new Promise((resolve, reject) => {
       let isTerminated = false;
-      let stdout = '';
-      let stderr = '';
       
-      exec.start((err, stream) => {
+      const cleanup = async () => {
+        if (!isTerminated) {
+          isTerminated = true;
+          try {
+            // Force kill the container and recreate it
+            await restartContainer(containerName);
+          } catch (err) {
+            console.error('Error during cleanup:', err);
+          }
+        }
+      };
+
+      exec.start({ hijack: true, stdin: true }, (err, stream) => {
         if (err) {
+          cleanup();
           return reject(err);
         }
+        
+        let stdout = '';
+        let stderr = '';
+        let outputExceeded = false;
 
+        // Handle the multiplexed streams
         container.modem.demuxStream(stream, {
           write: (chunk) => {
             if (stdout.length + chunk.length <= 10 * 1024) {
               stdout += chunk.toString('utf8');
-            } else if (!isTerminated) {
+            } else if (!outputExceeded) {
               stdout += '\n... Output limit exceeded. Stopping execution ...\n';
-              isTerminated = true;
+              outputExceeded = true;
+              cleanup();
               resolve({ stdout, stderr, outputExceeded: true });
             }
           }
@@ -334,17 +303,13 @@ app.post('/api/execute', async (req, res) => {
 
         stream.on('end', () => {
           clearTimeout(timeoutId);
-          if (!isTerminated) {
-            resolve({ stdout, stderr });
-          }
+          resolve({ stdout, stderr });
         });
 
-        stream.on('error', (error) => {
+        stream.on('error', async (error) => {
           clearTimeout(timeoutId);
-          if (!isTerminated) {
-            isTerminated = true;
-            reject(error);
-          }
+          await cleanup();
+          reject(error);
         });
       });
     });
@@ -363,8 +328,17 @@ app.post('/api/execute', async (req, res) => {
                    outputExceeded ? 'Stopped (output limit exceeded)' : 
                    `${executionTime}ms`
     });
+
   } catch (error) {
     console.error('Error executing code:', error);
+    // Ensure cleanup even on error
+    if (containerName) {
+      try {
+        await restartContainer(containerName);
+      } catch (err) {
+        console.error('Error during error cleanup:', err);
+      }
+    }
     res.status(500).json({ error: error.message });
   }
 });
