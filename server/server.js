@@ -12,96 +12,21 @@ app.use(express.json());
 // Container name prefix
 const CONTAINER_PREFIX = 'code-runner-';
 
-// Track container states
-const containerStates = new Map();
+// Track active executions
+const activeExecutions = new Map();
 
-// Container state constants
-const CONTAINER_STATE = {
-  IDLE: 'idle',
-  RUNNING: 'running',
-  CLEANING: 'cleaning'
-};
-
-// Track running executions
-const runningExecutions = new Map();
-
-// Maximum execution time (5 seconds)
-const MAX_EXECUTION_TIME = 5000;
-
-// Maximum output buffer size (10KB)
-const MAX_OUTPUT_SIZE = 10 * 1024;
-
-// Function to ensure container is ready
-async function ensureContainerReady(containerName) {
+// Function to kill a specific execution
+async function killExecution(containerId, execId) {
   try {
-    let container;
-    try {
-      container = docker.getContainer(containerName);
-      const info = await container.inspect();
-      
-      if (!info.State.Running) {
-        console.log(`Container ${containerName} exists but not running, starting it...`);
-        await container.start();
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait longer for container to be ready
-      }
-    } catch (err) {
-      if (err.statusCode === 404) {
-        console.log(`Container ${containerName} not found, creating new one...`);
-        await restartContainer(containerName);
-        return true;
-      }
-      throw err;
-    }
-    
-    // Verify container is actually running
-    const verifyInfo = await container.inspect();
-    if (!verifyInfo.State.Running) {
-      console.log(`Container ${containerName} failed to start, recreating...`);
-      await restartContainer(containerName);
-    }
-    
-    return true;
+    const container = docker.getContainer(containerId);
+    await container.exec({
+      Cmd: ['pkill', '-f', 'java'],
+      AttachStdout: true,
+      AttachStderr: true
+    });
+    activeExecutions.delete(execId);
   } catch (error) {
-    console.error(`Error ensuring container ${containerName} is ready:`, error);
-    return false;
-  }
-}
-
-// Function to ensure image exists
-async function ensureImageExists(imageName) {
-  try {
-    console.log(`Checking if image ${imageName} exists...`);
-    await docker.getImage(imageName).inspect();
-    console.log(`Image ${imageName} found`);
-    return true;
-  } catch (error) {
-    if (error.statusCode === 404) {
-      console.log(`Image ${imageName} not found, building...`);
-      try {
-        // Build the image
-        const language = imageName.replace('code-runner-', '');
-        const stream = await docker.buildImage({
-          context: './docker',
-          src: [`Dockerfile.${language}`, 'runner.js']
-        }, {
-          t: imageName,
-          dockerfile: `Dockerfile.${language}`
-        });
-
-        // Wait for the build to complete
-        await new Promise((resolve, reject) => {
-          docker.modem.followProgress(stream, (err, res) => err ? reject(err) : resolve(res));
-        });
-
-        console.log(`Image ${imageName} built successfully`);
-        return true;
-      } catch (buildError) {
-        console.error(`Error building image ${imageName}:`, buildError);
-        return false;
-      }
-    }
-    console.error(`Error checking image ${imageName}:`, error);
-    return false;
+    console.error('Error killing execution:', error);
   }
 }
 
@@ -298,97 +223,47 @@ app.post('/api/execute', async (req, res) => {
   }
 
   const containerName = `${CONTAINER_PREFIX}${language}`;
-
   try {
-    // Ensure container is ready before execution
-    console.log(`Preparing container ${containerName} for execution...`);
-    const isReady = await ensureContainerReady(containerName);
-    if (!isReady) {
-      throw new Error('Failed to prepare container for execution');
+    let container;
+    try {
+      container = docker.getContainer(containerName);
+      await container.inspect();
+    } catch (error) {
+      // Container doesn't exist or can't be inspected, create new one
+      await docker.createContainer({
+        Image: `code-runner-${language}`,
+        name: containerName,
+        AttachStdin: true,
+        AttachStdout: true,
+        AttachStderr: true,
+        Tty: true,
+        OpenStdin: true,
+        StdinOnce: false,
+        HostConfig: {
+          AutoRemove: false
+        }
+      });
+      container = docker.getContainer(containerName);
+      await container.start();
     }
 
-    const container = docker.getContainer(containerName);
-    
     // Create execution command based on language
     let cmd;
     switch (language) {
+      case 'java':
+        const escapedCode = code
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t');
+        cmd = ['timeout', '5s', 'java', '-cp', '.', 'Runner', `"${escapedCode}"`, input || ''];
+        break;
       case 'python':
         cmd = ['python', '-c', code];
         break;
       case 'javascript':
         cmd = ['node', '-e', code];
-        break;
-      case 'java': {
-        // For Java, we need to determine if the code contains a class definition
-        const hasClassDef = /class\s+\w+/.test(code);
-        const className = hasClassDef ? code.match(/class\s+(\w+)/)[1] : 'Main';
-        const fullCode = hasClassDef ? code : `public class Main { public static void main(String[] args) { ${code} } }`;
-        
-        // Write code to file
-        console.log('Writing Java code to file...');
-        const writeCmd = await container.exec({
-          Cmd: ['sh', '-c', `echo '${fullCode}' > ${className}.java`],
-          WorkingDir: '/app',
-          AttachStdout: true,
-          AttachStderr: true
-        });
-        
-        await new Promise((resolve, reject) => {
-          writeCmd.start((err, stream) => {
-            if (err) return reject(err);
-            container.modem.demuxStream(stream, process.stdout, process.stderr);
-            stream.on('end', resolve);
-            stream.on('error', reject);
-          });
-        });
-        
-        // If input is provided, write it to a file
-        if (input) {
-          console.log('Writing input to file...');
-          // Format input: add newline at the end to ensure Scanner can read it
-          const formattedInput = input.trim() + '\n';
-          const writeInputCmd = await container.exec({
-            Cmd: ['sh', '-c', `printf '${formattedInput}' > input.txt`],
-            WorkingDir: '/app',
-            AttachStdout: true,
-            AttachStderr: true
-          });
-          
-          await new Promise((resolve, reject) => {
-            writeInputCmd.start((err, stream) => {
-              if (err) return reject(err);
-              container.modem.demuxStream(stream, process.stdout, process.stderr);
-              stream.on('end', resolve);
-              stream.on('error', reject);
-            });
-          });
-        }
-        
-        // Compile the code
-        console.log('Compiling Java code...');
-        const compileCmd = await container.exec({
-          Cmd: ['javac', `${className}.java`],
-          WorkingDir: '/app',
-          AttachStdout: true,
-          AttachStderr: true
-        });
-        
-        await new Promise((resolve, reject) => {
-          compileCmd.start((err, stream) => {
-            if (err) return reject(err);
-            container.modem.demuxStream(stream, process.stdout, process.stderr);
-            stream.on('end', resolve);
-            stream.on('error', reject);
-          });
-        });
-        
-        // Run the code with input redirection if provided
-        console.log('Running Java code...');
-        if (input) {
-          cmd = ['sh', '-c', `cat input.txt | java ${className}`];
-        } else {
-          cmd = ['java', className];
-        }
         break;
       }
       default:
@@ -401,14 +276,25 @@ app.post('/api/execute', async (req, res) => {
       Cmd: cmd,
       AttachStdout: true,
       AttachStderr: true,
-      WorkingDir: '/app',
-      Tty: false
+      AttachStdin: true
     });
 
+    // Track this execution
+    const execId = exec.id;
+    activeExecutions.set(execId, {
+      containerId: container.id,
+      startTime: Date.now()
+    });
+
+    // Set timeout to prevent infinite execution
+    const timeoutId = setTimeout(async () => {
+      if (activeExecutions.has(execId)) {
+        await killExecution(container.id, execId);
+        stderr += '\n... Execution timed out (5 seconds limit) ...\n';
+      }
+    }, 5000);
+
     const start = Date.now();
-    
-    // Store the execution for potential termination
-    runningExecutions.set(containerName, { exec, container, start });
 
     // Create a promise to handle the execution
     const execPromise = new Promise((resolve, reject) => {
@@ -423,7 +309,7 @@ app.post('/api/execute', async (req, res) => {
 
         container.modem.demuxStream(stream, {
           write: (chunk) => {
-            if (stdout.length + chunk.length <= MAX_OUTPUT_SIZE) {
+            if (stdout.length + chunk.length <= 10 * 1024) {
               stdout += chunk.toString('utf8');
             } else if (!isTerminated) {
               stdout += '\n... Output limit exceeded. Stopping execution ...\n';
@@ -433,20 +319,18 @@ app.post('/api/execute', async (req, res) => {
           }
         }, {
           write: (chunk) => {
-            if (stderr.length + chunk.length <= MAX_OUTPUT_SIZE) {
+            if (stderr.length + chunk.length <= 10 * 1024) {
               stderr += chunk.toString('utf8');
             }
           }
         });
 
         // Set timeout to prevent infinite execution
-        const timeoutId = setTimeout(() => {
-          if (!isTerminated) {
-            isTerminated = true;
-            stderr += '\n... Execution timed out (5 seconds limit) ...\n';
-            resolve({ stdout, stderr, timedOut: true });
-          }
-        }, MAX_EXECUTION_TIME);
+        const timeoutId = setTimeout(async () => {
+          stderr += '\n... Execution timed out (5 seconds limit) ...\n';
+          await cleanup();
+          resolve({ stdout, stderr, timedOut: true });
+        }, 5000);
 
         stream.on('end', () => {
           clearTimeout(timeoutId);
@@ -469,19 +353,7 @@ app.post('/api/execute', async (req, res) => {
     const executionTime = Date.now() - start;
 
     // Clean up
-    runningExecutions.delete(containerName);
-
-    // Clean up input file if it exists
-    if (input) {
-      try {
-        await container.exec({
-          Cmd: ['rm', 'input.txt'],
-          WorkingDir: '/app'
-        }).start();
-      } catch (error) {
-        console.error('Error cleaning up input file:', error);
-      }
-    }
+    activeExecutions.delete(execId);
 
     // Send response
     res.json({
@@ -508,7 +380,6 @@ app.post('/api/execute/stop', async (req, res) => {
   try {
     // Force restart the container to kill any running processes
     await restartContainer(containerName);
-    runningExecutions.delete(containerName);
     res.json({ status: 'success', message: 'Execution stopped' });
   } catch (error) {
     console.error('Error stopping execution:', error);
