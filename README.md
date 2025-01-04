@@ -12,6 +12,15 @@ A React application for managing Docker containers that execute code in multiple
 - Output buffering and truncation for large outputs
 - Stop button functionality for long-running code
 
+## Technologies Used
+- Node.js
+- Express
+- Docker
+- JavaScript
+- Java
+- Python
+- C++
+
 ## Prerequisites
 
 - Node.js (v16 or later)
