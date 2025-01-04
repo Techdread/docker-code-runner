@@ -19,4 +19,5 @@ USER coderunner
 # Copy the execution script
 COPY --chown=coderunner:coderunner runner.py .
 
-CMD ["python", "runner.py"]
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]

@@ -17,4 +17,5 @@ USER coderunner
 # Copy the execution script
 COPY --chown=coderunner:coderunner runner.js .
 
-CMD ["node", "runner.js"]
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]
