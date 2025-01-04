@@ -12,14 +12,23 @@ app.use(express.json());
 // Container name prefix
 const CONTAINER_PREFIX = 'code-runner-';
 
-// Track running executions
-const runningExecutions = new Map();
+// Track active executions
+const activeExecutions = new Map();
 
-// Maximum execution time (5 seconds)
-const MAX_EXECUTION_TIME = 5000;
-
-// Maximum output buffer size (10KB)
-const MAX_OUTPUT_SIZE = 10 * 1024;
+// Function to kill a specific execution
+async function killExecution(containerId, execId) {
+  try {
+    const container = docker.getContainer(containerId);
+    await container.exec({
+      Cmd: ['pkill', '-f', 'java'],
+      AttachStdout: true,
+      AttachStderr: true
+    });
+    activeExecutions.delete(execId);
+  } catch (error) {
+    console.error('Error killing execution:', error);
+  }
+}
 
 // Function to restart container
 async function restartContainer(containerName) {
@@ -164,21 +173,34 @@ app.post('/api/execute', async (req, res) => {
     return res.status(400).json({ error: 'Language and code are required' });
   }
 
-  let containerName;
+  const containerName = `${CONTAINER_PREFIX}${language}`;
   try {
-    // Ensure we have a clean container for execution
-    containerName = await ensureCleanContainer(language);
-    const container = docker.getContainer(containerName);
-    
+    let container;
+    try {
+      container = docker.getContainer(containerName);
+      await container.inspect();
+    } catch (error) {
+      // Container doesn't exist or can't be inspected, create new one
+      await docker.createContainer({
+        Image: `code-runner-${language}`,
+        name: containerName,
+        AttachStdin: true,
+        AttachStdout: true,
+        AttachStderr: true,
+        Tty: true,
+        OpenStdin: true,
+        StdinOnce: false,
+        HostConfig: {
+          AutoRemove: false
+        }
+      });
+      container = docker.getContainer(containerName);
+      await container.start();
+    }
+
     // Create execution command based on language
     let cmd;
     switch (language) {
-      case 'python':
-        cmd = ['python', '-c', code];
-        break;
-      case 'javascript':
-        cmd = ['node', '-e', code];
-        break;
       case 'java':
         const escapedCode = code
           .replace(/\\/g, '\\\\')
@@ -186,7 +208,13 @@ app.post('/api/execute', async (req, res) => {
           .replace(/\n/g, '\\n')
           .replace(/\r/g, '\\r')
           .replace(/\t/g, '\\t');
-        cmd = ['java', '-cp', '.', 'Runner', `"${escapedCode}"`, input || ''];
+        cmd = ['timeout', '5s', 'java', '-cp', '.', 'Runner', `"${escapedCode}"`, input || ''];
+        break;
+      case 'python':
+        cmd = ['python', '-c', code];
+        break;
+      case 'javascript':
+        cmd = ['node', '-e', code];
         break;
       case 'cpp':
         cmd = ['sh', '-c', `echo '${code}' > main.cpp && g++ main.cpp -o main && ./main`];
@@ -199,13 +227,26 @@ app.post('/api/execute', async (req, res) => {
     const exec = await container.exec({
       Cmd: cmd,
       AttachStdout: true,
-      AttachStderr: true
+      AttachStderr: true,
+      AttachStdin: true
     });
 
+    // Track this execution
+    const execId = exec.id;
+    activeExecutions.set(execId, {
+      containerId: container.id,
+      startTime: Date.now()
+    });
+
+    // Set timeout to prevent infinite execution
+    const timeoutId = setTimeout(async () => {
+      if (activeExecutions.has(execId)) {
+        await killExecution(container.id, execId);
+        stderr += '\n... Execution timed out (5 seconds limit) ...\n';
+      }
+    }, 5000);
+
     const start = Date.now();
-    
-    // Store the execution for potential termination
-    runningExecutions.set(containerName, { exec, container, start });
 
     // Create a promise to handle the execution
     const execPromise = new Promise((resolve, reject) => {
@@ -236,7 +277,7 @@ app.post('/api/execute', async (req, res) => {
         // Handle the multiplexed streams
         container.modem.demuxStream(stream, {
           write: (chunk) => {
-            if (stdout.length + chunk.length <= MAX_OUTPUT_SIZE) {
+            if (stdout.length + chunk.length <= 10 * 1024) {
               stdout += chunk.toString('utf8');
             } else if (!outputExceeded) {
               stdout += '\n... Output limit exceeded. Stopping execution ...\n';
@@ -247,7 +288,7 @@ app.post('/api/execute', async (req, res) => {
           }
         }, {
           write: (chunk) => {
-            if (stderr.length + chunk.length <= MAX_OUTPUT_SIZE) {
+            if (stderr.length + chunk.length <= 10 * 1024) {
               stderr += chunk.toString('utf8');
             }
           }
@@ -258,7 +299,7 @@ app.post('/api/execute', async (req, res) => {
           stderr += '\n... Execution timed out (5 seconds limit) ...\n';
           await cleanup();
           resolve({ stdout, stderr, timedOut: true });
-        }, MAX_EXECUTION_TIME);
+        }, 5000);
 
         stream.on('end', () => {
           clearTimeout(timeoutId);
@@ -277,7 +318,7 @@ app.post('/api/execute', async (req, res) => {
     const executionTime = Date.now() - start;
 
     // Clean up
-    runningExecutions.delete(containerName);
+    activeExecutions.delete(execId);
 
     // Send response
     res.json({
@@ -313,7 +354,6 @@ app.post('/api/execute/stop', async (req, res) => {
   try {
     // Force restart the container to kill any running processes
     await restartContainer(containerName);
-    runningExecutions.delete(containerName);
     res.json({ status: 'success', message: 'Execution stopped' });
   } catch (error) {
     console.error('Error stopping execution:', error);
