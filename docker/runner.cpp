@@ -4,6 +4,7 @@
 #include <ctime>
 #include <string>
 #include <fstream>
+#include <csignal>
 
 struct ExecutionResult {
     std::string stdout;
@@ -40,25 +41,28 @@ int main() {
     buffer << std::cin.rdbuf();
     std::string code = buffer.str();
 
-    // Create a temporary file for the code
-    std::string tempFileName = "temp_code.cpp";
+    // Create a temporary file for the code in /tmp/workspace
+    std::string tempFileName = "/tmp/workspace/temp_code.cpp";
     std::ofstream tempFile(tempFileName);
+    if (!tempFile.is_open()) {
+        std::cout << "{\"stdout\":\"\",\"stderr\":\"Failed to create temporary file\",\"executionTime\":\"0s\",\"status\":\"failure\"}" << std::endl;
+        return 1;
+    }
     tempFile << code;
     tempFile.close();
 
     auto start = std::chrono::high_resolution_clock::now();
     
-    // Compile and execute the code
     ExecutionResult result;
     
     // Compile
-    std::string compileCmd = "g++ -o temp_executable " + tempFileName + " 2>&1";
+    std::string compileCmd = "g++ -o /tmp/workspace/temp_executable " + tempFileName + " 2>&1";
     FILE* pipe = popen(compileCmd.c_str(), "r");
     if (!pipe) {
         result.status = "failure";
-        result.stderr = "Failed to compile";
+        result.stderr = "Failed to start compilation";
     } else {
-        char buffer[128];
+        char buffer[4096];
         std::string compileOutput;
         while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
             compileOutput += buffer;
@@ -69,11 +73,12 @@ int main() {
             result.status = "failure";
             result.stderr = compileOutput;
         } else {
-            // Execute
-            pipe = popen("./temp_executable 2>&1", "r");
+            // Execute with timeout
+            std::string execCmd = "timeout 5s /tmp/workspace/temp_executable 2>&1";
+            pipe = popen(execCmd.c_str(), "r");
             if (!pipe) {
                 result.status = "failure";
-                result.stderr = "Failed to execute";
+                result.stderr = "Failed to execute program";
             } else {
                 std::string output;
                 while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
@@ -81,9 +86,13 @@ int main() {
                 }
                 int execStatus = pclose(pipe);
 
-                if (execStatus != 0) {
+                // Check if program was terminated by timeout
+                if (WIFEXITED(execStatus) && WEXITSTATUS(execStatus) == 124) {
                     result.status = "failure";
-                    result.stderr = output;
+                    result.stderr = "Program execution timed out";
+                } else if (execStatus != 0) {
+                    result.status = "failure";
+                    result.stderr = output.empty() ? "Runtime error" : output;
                 } else {
                     result.status = "success";
                     result.stdout = output;
@@ -94,7 +103,6 @@ int main() {
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end - start;
-    
     result.executionTime = std::to_string(diff.count()) + "s";
 
     // Output result as JSON
@@ -107,7 +115,7 @@ int main() {
 
     // Cleanup
     std::remove(tempFileName.c_str());
-    std::remove("temp_executable");
+    std::remove("/tmp/workspace/temp_executable");
 
     return 0;
 }
