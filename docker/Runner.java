@@ -3,6 +3,146 @@ import java.util.*;
 import javax.tools.*;
 
 public class Runner {
+    private static class CodeAnalyzer {
+        private final String code;
+        private final List<String> imports;
+        private final Map<String, String> classes;
+        private String mainClassName;
+        
+        public CodeAnalyzer(String code) {
+            this.code = code;
+            this.imports = new ArrayList<>();
+            this.classes = new HashMap<>();
+            analyze();
+        }
+        
+        private void analyze() {
+            Scanner scanner = new Scanner(code);
+            StringBuilder currentClass = new StringBuilder();
+            String currentClassName = null;
+            int braceCount = 0;
+            
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine();
+                String trimmedLine = line.trim();
+                
+                if (trimmedLine.startsWith("import ")) {
+                    imports.add(line);
+                    continue;
+                }
+                
+                if (trimmedLine.contains("class ")) {
+                    if (currentClassName != null) {
+                        classes.put(currentClassName, currentClass.toString());
+                        currentClass = new StringBuilder();
+                    }
+                    currentClassName = extractClassName(trimmedLine);
+                    currentClass.append(line).append("\n");
+                    braceCount += countChar(line, '{');
+                } else {
+                    if (currentClassName != null) {
+                        currentClass.append(line).append("\n");
+                    }
+                    braceCount += countChar(line, '{');
+                }
+                
+                braceCount -= countChar(line, '}');
+                
+                if (braceCount == 0 && currentClassName != null) {
+                    classes.put(currentClassName, currentClass.toString());
+                    currentClass = new StringBuilder();
+                    currentClassName = null;
+                }
+                
+                // Check for main method
+                if (trimmedLine.contains("public static void main(String")) {
+                    if (currentClassName != null) {
+                        mainClassName = currentClassName;
+                    }
+                }
+            }
+            
+            // Handle the last class if any
+            if (currentClassName != null) {
+                classes.put(currentClassName, currentClass.toString());
+            }
+            
+            scanner.close();
+        }
+        
+        private int countChar(String str, char ch) {
+            return (int) str.chars().filter(c -> c == ch).count();
+        }
+        
+        private String extractClassName(String line) {
+            String[] parts = line.split("\\s+");
+            for (int i = 0; i < parts.length; i++) {
+                if (parts[i].equals("class") && i + 1 < parts.length) {
+                    return parts[i + 1].split("\\{")[0].trim();
+                }
+            }
+            return null;
+        }
+        
+        public boolean hasClasses() {
+            return !classes.isEmpty();
+        }
+        
+        public boolean hasMainClass() {
+            return mainClassName != null;
+        }
+        
+        public List<File> createSourceFiles() throws IOException {
+            List<File> sourceFiles = new ArrayList<>();
+            
+            if (!hasClasses()) {
+                // Case 1: Plain code without class
+                String wrappedCode = String.join("\n", imports) +
+                    "\npublic class Main {\n" +
+                    "    public static void main(String[] args) {\n" +
+                    "        " + code + "\n" +
+                    "    }\n" +
+                    "}\n";
+                File mainFile = new File("Main.java");
+                try (PrintWriter writer = new PrintWriter(new FileWriter(mainFile))) {
+                    writer.write(wrappedCode);
+                    sourceFiles.add(mainFile);
+                    System.err.println("[DEBUG] Created Main.java for plain code");
+                }
+                mainClassName = "Main";
+                return sourceFiles;
+            }
+            
+            // Case 2 & 3: Single class or multiple classes
+            String importsStr = String.join("\n", imports) + "\n";
+            
+            for (Map.Entry<String, String> entry : classes.entrySet()) {
+                String className = entry.getKey();
+                String classCode = entry.getValue();
+                
+                // Make the class public if it contains main or is the only class
+                if ((className.equals(mainClassName) || classes.size() == 1) && 
+                    !classCode.contains("public class")) {
+                    classCode = classCode.replace("class " + className, "public class " + className);
+                }
+                
+                File sourceFile = new File(className + ".java");
+                try (PrintWriter writer = new PrintWriter(new FileWriter(sourceFile))) {
+                    writer.write(importsStr + classCode);
+                    sourceFiles.add(sourceFile);
+                    System.err.println("[DEBUG] Created " + className + ".java");
+                }
+            }
+            
+            return sourceFiles;
+        }
+        
+        public String getMainClassName() {
+            return mainClassName != null ? mainClassName : 
+                   classes.size() == 1 ? classes.keySet().iterator().next() : "Main";
+        }
+    }
+
     public static void main(String[] args) {
         try {
             System.err.println("[DEBUG] Runner started");
@@ -12,7 +152,6 @@ public class Runner {
                 System.exit(1);
             }
 
-            // Remove surrounding quotes and unescape the code
             String code = args[0];
             System.err.println("[DEBUG] Received code: " + code.substring(0, Math.min(50, code.length())) + "...");
             
@@ -21,7 +160,6 @@ public class Runner {
                 System.err.println("[DEBUG] Removed quotes from code");
             }
             
-            // Get user input if provided as second argument
             String userInput = "";
             if (args.length > 1) {
                 userInput = args[1];
@@ -39,38 +177,19 @@ public class Runner {
             
             System.err.println("[DEBUG] Unescaped code: " + code.substring(0, Math.min(50, code.length())) + "...");
             
-            // Extract the class name from the code
-            String className = extractClassName(code);
-            if (className == null) {
-                className = "Main";
-                // Wrap the code in a Main class if it doesn't have a class definition
-                code = "public class Main { public static void main(String[] args) { " + code + " } }";
-                System.err.println("[DEBUG] Wrapped code in Main class");
-            } else {
-                System.err.println("[DEBUG] Found class name: " + className);
-                // If the class is not public, make it public
-                if (!code.contains("public class " + className)) {
-                    code = code.replace("class " + className, "public class " + className);
-                    System.err.println("[DEBUG] Made class public: " + className);
-                }
-            }
+            // Analyze and process the code
+            CodeAnalyzer analyzer = new CodeAnalyzer(code);
+            List<File> sourceFiles = analyzer.createSourceFiles();
+            String mainClassName = analyzer.getMainClassName();
 
-            // Create source file
-            File sourceFile = new File(className + ".java");
-            try (PrintWriter writer = new PrintWriter(new FileWriter(sourceFile))) {
-                writer.write(code);
-                System.err.println("[DEBUG] Wrote source file: " + sourceFile.getAbsolutePath());
-                System.err.println("[DEBUG] File contents:\n" + code);
-            }
-
-            // Compile the code
+            // Compile all source files
             JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
             DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
             StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null, null);
             
             System.err.println("[DEBUG] Starting compilation");
             
-            Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromFiles(Arrays.asList(sourceFile));
+            Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjectsFromFiles(sourceFiles);
             JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, diagnostics, null, null, compilationUnits);
 
             boolean success = task.call();
@@ -85,13 +204,12 @@ public class Runner {
             
             System.err.println("[DEBUG] Compilation successful");
 
-            // Run the compiled code in a separate process
-            System.err.println("[DEBUG] Starting execution of " + className);
-            ProcessBuilder pb = new ProcessBuilder("java", className);
+            // Run the compiled code
+            System.err.println("[DEBUG] Starting execution of " + mainClassName);
+            ProcessBuilder pb = new ProcessBuilder("java", mainClassName);
             pb.redirectErrorStream(true);
             Process process = pb.start();
 
-            // If we have user input, send it to the process
             if (!userInput.isEmpty()) {
                 System.err.println("[DEBUG] Sending user input: " + userInput);
                 try (PrintWriter pw = new PrintWriter(process.getOutputStream())) {
@@ -105,35 +223,18 @@ public class Runner {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     System.out.println(line);
-                    System.err.println("[DEBUG] Output line: " + line);
                 }
             }
 
+            // Wait for the process to complete
             int exitCode = process.waitFor();
-            System.err.println("[DEBUG] Process exited with code: " + exitCode);
+            System.err.println("[DEBUG] Process exited with code " + exitCode);
             System.exit(exitCode);
 
         } catch (Exception e) {
-            System.err.println("[DEBUG] Error occurred: " + e.getClass().getName() + ": " + e.getMessage());
+            System.err.println("[DEBUG] Error: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }
-    }
-
-    private static String extractClassName(String code) {
-        // Simple regex to extract class name
-        String[] lines = code.split("\n");
-        for (String line : lines) {
-            line = line.trim();
-            if (line.startsWith("class ") || line.startsWith("public class ")) {
-                String[] parts = line.split(" ");
-                for (int i = 0; i < parts.length; i++) {
-                    if (parts[i].equals("class") && i + 1 < parts.length) {
-                        return parts[i + 1].split("\\{")[0].trim();
-                    }
-                }
-            }
-        }
-        return null;
     }
 }
