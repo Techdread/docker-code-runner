@@ -21,6 +21,8 @@ public class Runner {
             StringBuilder currentClass = new StringBuilder();
             String currentClassName = null;
             int braceCount = 0;
+            boolean inClass = false;
+            StringBuilder lineBuffer = new StringBuilder();
             
             while (scanner.hasNextLine()) {
                 String line = scanner.nextLine();
@@ -31,27 +33,31 @@ public class Runner {
                     continue;
                 }
                 
+                // Handle class detection
                 if (trimmedLine.contains("class ")) {
-                    if (currentClassName != null) {
+                    if (currentClassName != null && inClass) {
                         classes.put(currentClassName, currentClass.toString());
                         currentClass = new StringBuilder();
                     }
                     currentClassName = extractClassName(trimmedLine);
+                    inClass = true;
                     currentClass.append(line).append("\n");
                     braceCount += countChar(line, '{');
-                } else {
-                    if (currentClassName != null) {
-                        currentClass.append(line).append("\n");
-                    }
+                } else if (inClass) {
+                    currentClass.append(line).append("\n");
                     braceCount += countChar(line, '{');
-                }
-                
-                braceCount -= countChar(line, '}');
-                
-                if (braceCount == 0 && currentClassName != null) {
-                    classes.put(currentClassName, currentClass.toString());
-                    currentClass = new StringBuilder();
-                    currentClassName = null;
+                    braceCount -= countChar(line, '}');
+                    
+                    if (braceCount == 0 && currentClassName != null) {
+                        // Ensure we have a complete class definition
+                        String classContent = currentClass.toString().trim();
+                        if (classContent.endsWith("}")) {
+                            classes.put(currentClassName, currentClass.toString());
+                            currentClass = new StringBuilder();
+                            currentClassName = null;
+                            inClass = false;
+                        }
+                    }
                 }
                 
                 // Check for main method
@@ -63,22 +69,55 @@ public class Runner {
             }
             
             // Handle the last class if any
-            if (currentClassName != null) {
-                classes.put(currentClassName, currentClass.toString());
+            if (currentClassName != null && inClass) {
+                String classContent = currentClass.toString().trim();
+                if (classContent.endsWith("}")) {
+                    classes.put(currentClassName, currentClass.toString());
+                }
             }
             
             scanner.close();
         }
         
         private int countChar(String str, char ch) {
-            return (int) str.chars().filter(c -> c == ch).count();
+            int count = 0;
+            for (int i = 0; i < str.length(); i++) {
+                if (str.charAt(i) == ch) {
+                    // Don't count braces in comments
+                    if (ch == '{' || ch == '}') {
+                        String beforeChar = str.substring(0, i).trim();
+                        if (!beforeChar.endsWith("//") && !isInMultiLineComment(str, i)) {
+                            count++;
+                        }
+                    } else {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        }
+        
+        private boolean isInMultiLineComment(String str, int pos) {
+            int lastComment = str.lastIndexOf("/*", pos);
+            if (lastComment == -1) return false;
+            int lastCommentEnd = str.lastIndexOf("*/", pos);
+            return lastCommentEnd < lastComment;
         }
         
         private String extractClassName(String line) {
+            // Remove any comments first
+            int commentIndex = line.indexOf("//");
+            if (commentIndex >= 0) {
+                line = line.substring(0, commentIndex);
+            }
+            
+            // Handle both inline and newline cases for class declaration
             String[] parts = line.split("\\s+");
             for (int i = 0; i < parts.length; i++) {
                 if (parts[i].equals("class") && i + 1 < parts.length) {
-                    return parts[i + 1].split("\\{")[0].trim();
+                    String className = parts[i + 1];
+                    // Remove any { or whitespace if present
+                    return className.split("[{\\s]")[0].trim();
                 }
             }
             return null;
@@ -130,7 +169,7 @@ public class Runner {
                 try (PrintWriter writer = new PrintWriter(new FileWriter(sourceFile))) {
                     writer.write(importsStr + classCode);
                     sourceFiles.add(sourceFile);
-                    System.err.println("[DEBUG] Created " + className + ".java");
+                    System.err.println("[DEBUG] Created " + className + ".java with contents:\n" + importsStr + classCode);
                 }
             }
             
