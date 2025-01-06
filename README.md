@@ -1,118 +1,104 @@
 # Docker Code Runner
 
-A React application for managing Docker containers that execute code in multiple programming languages.
-
-## Features
-
-- Execute code in Java, JavaScript, Python, and C++
-- Clean and intuitive UI with syntax highlighting
-- Real-time container status monitoring
-- Secure code execution in isolated containers
-- Automatic process termination for infinite loops
-- Output buffering and truncation for large outputs
-- Stop button functionality for long-running code
-
-## Technologies Used
-- Node.js
-- Express
-- Docker
-- JavaScript
-- Java
-- Python
-- C++
+A web-based code execution environment that supports multiple programming languages using Docker containers.
 
 ## Prerequisites
 
-- Node.js (v16 or later)
-- Docker Desktop for Windows
-- Windows 10 Pro
-- Visual Studio Code (recommended)
+1. Windows 10 Pro
+2. Visual Studio Code
+3. Node.js (v14 or higher)
+4. Docker Desktop for Windows
+5. WSL2 enabled
 
 ## Setup Instructions
 
-1. Install dependencies:
+1. **Start Docker Desktop**
+   - Make sure Docker Desktop is running
+   - Ensure it's using the WSL2 backend (Settings -> General -> Use WSL2 based engine)
+
+2. **Build and Start Containers**
    ```bash
+   # Build all containers
+   docker-compose build
+
+   # Start all containers in the background
+   docker-compose up -d
+   ```
+
+3. **Install Dependencies**
+   ```bash
+   # Install server dependencies
    npm install
    ```
 
-2. Build Docker images:
+4. **Start the Application**
    ```bash
-   cd docker
-   docker build -t code-runner-python -f Dockerfile.python .
-   docker build -t code-runner-javascript -f Dockerfile.javascript .
-   docker build -t code-runner-java -f Dockerfile.java .
-   docker build -t code-runner-cpp -f Dockerfile.cpp .
-   ```
-
-3. Start the backend server:
-   ```bash
+   # Start the server (in one terminal)
    cd server
-   npm install
-   node server.js
-   ```
-   The server will run on port 3001 by default.
+   npm run server
 
-4. Start the frontend development server:
+   # Start the frontend (in another terminal)
+   cd .. 
+   npm start
+   ```
+
+5. **Verify Container Status**
    ```bash
-   # In a new terminal, from the project root
-   npm run dev
+   # Check if all containers are running
+   docker ps
    ```
-   The frontend will run on port 5173 by default.
+   You should see four containers running:
+   - code-runner-java
+   - code-runner-python
+   - code-runner-javascript
+   - code-runner-cpp
 
-5. Open your browser and navigate to:
-   ```
-   http://localhost:5173
-   ```
+## Usage
 
-## Project Structure
-
-```
-docker-code-runner/
-├── src/                    # Frontend React application
-│   ├── components/
-│   │   ├── CodeEditor.jsx  # Code editor with execution controls
-│   │   └── ContainerDashboard.jsx
-│   ├── services/
-│   └── App.jsx
-├── server/                 # Backend Node.js server
-│   └── server.js          # API endpoints and container management
-├── docker/                 # Docker configurations
-│   ├── Dockerfile.python
-│   ├── Dockerfile.javascript
-│   ├── Dockerfile.java
-│   └── Dockerfile.cpp
-└── README.md
-```
-
-## Code Execution Limits
-
-- Maximum execution time: 5 seconds
-- Maximum output buffer: 10KB
-- Automatic container recycling after each execution
-- Force termination available via stop button
-
-## Security Considerations
-
-- All code execution happens in isolated Docker containers
-- Non-root users are used in containers
-- Resource limits are enforced
-- Network access is restricted
-- Containers are recycled after each execution
-- Output buffering prevents memory exhaustion
+1. Open your browser and navigate to `http://localhost:5173/`
+2. Select a programming language from the dropdown
+3. Write your code in the editor
+4. Click "Run Code" to execute
+5. View the output below the editor
 
 ## Troubleshooting
 
-If you encounter any issues:
-
-1. Ensure Docker Desktop is running
-2. Check both frontend and backend server logs
-3. If a container becomes unresponsive:
+1. **Containers Not Starting**
    ```bash
-   docker ps  # List running containers
-   docker kill <container-id>  # Force stop a container
+   # Stop all containers
+   docker-compose down
+
+   # Remove all containers and rebuild
+   docker-compose down --rmi all
+   docker-compose up -d --build
    ```
-4. Restart the backend server if needed
 
-## License
+2. **Container Logs**
+   ```bash
+   # View logs for a specific container (replace java with python/javascript/cpp)
+   docker logs code-runner-java
+   ```
 
-MIT
+3. **Server Issues**
+   ```bash
+   # Check if server is running
+   curl http://localhost:3001/health
+   ```
+
+## Features
+
+- Multi-language support (Java, Python, JavaScript, C++)
+- Real-time code execution
+- Syntax highlighting
+- Input support
+- Debug trace with toggle
+- Code execution interruption
+- Secure containerized execution
+
+## Security Notes
+
+- Each language runs in its own isolated container
+- Execution timeout of 30 seconds
+- Memory and CPU limits enforced by Docker
+- No network access from code containers
+- Input sanitization for all code execution

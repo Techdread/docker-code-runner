@@ -134,41 +134,55 @@ const ContainerDashboard = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {containers.map((container) => (
-              <TableRow key={container.language}>
-                <TableCell>{container.id}</TableCell>
-                <TableCell>{container.language}</TableCell>
-                <TableCell>
-                  <Chip
-                    label={container.status}
-                    color={getStatusColor(container.status)}
-                    size="small"
-                  />
-                </TableCell>
-                <TableCell>{container.uptime || '0m'}</TableCell>
-                <TableCell>
-                  {container.status === 'running' ? (
-                    <IconButton
-                      onClick={() => handleStopContainer(container.id)}
-                      disabled={loading || container.id === '-'}
-                      color="error"
-                      size="small"
-                    >
-                      <StopIcon />
-                    </IconButton>
-                  ) : (
-                    <IconButton
-                      onClick={() => handleStartContainer(container.language)}
-                      disabled={loading}
-                      color="success"
-                      size="small"
-                    >
-                      <PlayArrowIcon />
-                    </IconButton>
-                  )}
-                </TableCell>
+            {loading ? (
+              <TableRow>
+                <TableCell colSpan={5} align="center">Loading...</TableCell>
               </TableRow>
-            ))}
+            ) : error ? (
+              <TableRow>
+                <TableCell colSpan={5} align="center" style={{ color: 'red' }}>{error}</TableCell>
+              </TableRow>
+            ) : containers && Array.isArray(containers) && containers.length > 0 ? (
+              containers.map((container) => (
+                <TableRow key={container.language}>
+                  <TableCell>{container.id}</TableCell>
+                  <TableCell>{container.language}</TableCell>
+                  <TableCell>
+                    <Chip
+                      label={container.status}
+                      color={getStatusColor(container.status)}
+                      size="small"
+                    />
+                  </TableCell>
+                  <TableCell>{container.uptime || '0m'}</TableCell>
+                  <TableCell>
+                    {container.status === 'running' ? (
+                      <IconButton
+                        onClick={() => handleStopContainer(container.id)}
+                        disabled={loading || container.id === '-'}
+                        color="error"
+                        size="small"
+                      >
+                        <StopIcon />
+                      </IconButton>
+                    ) : (
+                      <IconButton
+                        onClick={() => handleStartContainer(container.language)}
+                        disabled={loading}
+                        color="success"
+                        size="small"
+                      >
+                        <PlayArrowIcon />
+                      </IconButton>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={5} align="center">No containers found</TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </TableContainer>
